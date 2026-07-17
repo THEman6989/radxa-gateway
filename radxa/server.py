@@ -107,10 +107,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type","text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(HTML.format(
-            host=socket.gethostname(),
-            port=self.server.server_port
-        ).encode())
+        page = HTML.replace("{host}", socket.gethostname()).replace("{port}", str(self.server.server_address[1]))
+        self.wfile.write(page.encode())
 
     def do_POST(self):
         if self.path == "/shutdown":
