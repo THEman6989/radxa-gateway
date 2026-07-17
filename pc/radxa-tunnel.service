@@ -1,0 +1,13 @@
+[Unit]
+Description=Reverse SSH Tunnel to Radxa
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -i /home/amin/.ssh/radxa_tunnel -N -R 2222:localhost:2222 radxa@192.168.178.159
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
