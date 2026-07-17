@@ -161,6 +161,6 @@ if __name__ == "__main__":
     import socketserver
     class RS(http.server.HTTPServer):
         allow_reuse_address = True
-    server = RS(("0.0.0.0", PORT), Handler)
+    server = RS(("127.0.0.1", PORT), Handler)
     print(f"Radxa server on 0.0.0.0:{PORT}")
     server.serve_forever()

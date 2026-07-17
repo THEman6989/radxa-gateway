@@ -63,3 +63,16 @@ sudo tailscale up --accept-routes --ssh
 ```
 
 Danach erreichbar unter: `http://rock-2a.<tailnet>.ts.net:4000`
+
+## Tailscale HTTPS
+
+Der Server bindet nur an `127.0.0.1:4000` — nicht im lokalen Netzwerk erreichbar.
+Zugriff ausschließlich über Tailscale:
+
+```bash
+# Einmalig auf dem Radxa:
+sudo tailscale up --accept-routes --ssh --operator=radxa
+sudo tailscale serve --bg --https=443 http://localhost:4000
+```
+
+Danach erreichbar unter: **https://rock-2a.tail852b38.ts.net**
