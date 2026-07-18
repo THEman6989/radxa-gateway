@@ -135,11 +135,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"status":"error","message":str(e)}, code=500)
 
     def _run_wol(self):
+        mac = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
+        broadcast = os.environ.get("WOL_BROADCAST", "192.168.178.255")
+        port = os.environ.get("WOL_PORT", "9")
         try:
-            r = subprocess.run([
-                "wakeonlan", "10:7c:61:47:07:d9"
-            ], capture_output=True, text=True, timeout=10)
-            self._json({"status":"ok","message":"Magic Packet gesendet."})
+            r = subprocess.run(
+                ["/usr/bin/wakeonlan", "-i", broadcast, "-p", port, mac],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                msg = r.stdout.strip() or f"Magic Packet an {mac} über {broadcast}:{port} gesendet."
+                self._json({"status":"ok","message":msg})
+            else:
+                err = r.stderr.strip() or r.stdout.strip() or f"wakeonlan Exit-Code {r.returncode}"
+                self._json({"status":"error","message":err}, code=500)
         except FileNotFoundError:
             self._json({"status":"error","message":"wakeonlan nicht installiert"}, code=500)
         except Exception as e:

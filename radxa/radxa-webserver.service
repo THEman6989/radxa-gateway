@@ -10,6 +10,9 @@ WorkingDirectory=/home/radxa/www
 Restart=always
 RestartSec=5
 Environment=PORT=4000
+Environment=WOL_MAC=10:7c:61:47:07:d9
+Environment=WOL_BROADCAST=192.168.178.255
+Environment=WOL_PORT=9
 
 [Install]
 WantedBy=default.target
