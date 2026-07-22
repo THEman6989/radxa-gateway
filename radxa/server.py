@@ -66,6 +66,12 @@ function msg(text, ok) {
   m.className = "msg " + (ok ? "msg-ok" : "msg-err");
 }
 
+function doubleConfirm(question) {
+  if (!confirm(question)) return false;
+  if (!confirm("WIRKLICH? Nochmal bestätigen.")) return false;
+  return true;
+}
+
 async function wakePC() {
   const btn = event.target;
   btn.disabled = true;
@@ -83,7 +89,7 @@ async function wakePC() {
 }
 
 async function sleepPC() {
-  if (!confirm("PC in Standby versetzen?")) return;
+  if (!doubleConfirm("PC in Standby versetzen?")) return;
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = "Standby...";
@@ -100,7 +106,7 @@ async function sleepPC() {
 }
 
 async function shutdownPC() {
-  if (!confirm("PC wirklich herunterfahren?")) return;
+  if (!doubleConfirm("PC wirklich herunterfahren?")) return;
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = "Fahre herunter...";
