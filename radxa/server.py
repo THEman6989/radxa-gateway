@@ -30,6 +30,8 @@ h1 { color: #2dd4bf; margin-bottom: 1rem; }
        cursor: pointer; transition: background 0.2s; color: white; }
 .btn-wake { background: #22c55e; }
 .btn-wake:hover { background: #16a34a; }
+.btn-sleep { background: #f59e0b; }
+.btn-sleep:hover { background: #d97706; }
 .btn-shutdown { background: #ef4444; }
 .btn-shutdown:hover { background: #dc2626; }
 .btn:disabled { background: #4b5563 !important; cursor: not-allowed; }
@@ -49,6 +51,7 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 
 <div class="actions">
 <button class="btn btn-wake" onclick="wakePC()" title="Magic Packet an PC senden">PC Aufwecken</button>
+<button class="btn btn-sleep" onclick="sleepPC()" title="PC in Standby versetzen">PC Schlafen</button>
 <button class="btn btn-shutdown" onclick="shutdownPC()" title="PC per SSH herunterfahren">PC Herunterfahren</button>
 </div>
 <div class="msg" id="msg"></div>
@@ -77,6 +80,23 @@ async function wakePC() {
   }
   btn.disabled = false;
   btn.textContent = "PC Aufwecken";
+}
+
+async function sleepPC() {
+  if (!confirm("PC in Standby versetzen?")) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = "Standby...";
+  msg("");
+  try {
+    const r = await fetch("/sleep", {method:"POST"});
+    const d = await r.json();
+    msg(d.message || "OK", d.status === "ok");
+  } catch(e) {
+    msg("PC schläft jetzt.", true);
+  }
+  btn.disabled = false;
+  btn.textContent = "PC Schlafen";
 }
 
 async function shutdownPC() {
@@ -113,10 +133,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/shutdown":
             self._run_ssh_shutdown()
+        elif self.path == "/sleep":
+            self._run_ssh_sleep()
         elif self.path == "/wake":
             self._run_wol()
         else:
             self.send_error(404)
+
+    def _run_ssh_sleep(self):
+        try:
+            r = subprocess.run([
+                "ssh", "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=5", "-p", "2222",
+                "amin@localhost", "sudo systemctl suspend"
+            ], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                self._json({"status":"ok","message":"PC geht in Standby."})
+            else:
+                err = r.stderr.strip() or f"Exit-Code {r.returncode}"
+                self._json({"status":"error","message":err}, code=500)
+        except subprocess.TimeoutExpired:
+            self._json({"status":"ok","message":"PC antwortet nicht mehr — vermutlich im Standby."})
+        except Exception as e:
+            self._json({"status":"error","message":str(e)}, code=500)
 
     def _run_ssh_shutdown(self):
         try:
