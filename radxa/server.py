@@ -5,6 +5,8 @@ import socket
 import os
 import json
 import subprocess
+import threading
+import time
 
 HTML = """<!DOCTYPE html>
 <html lang="de">
@@ -74,8 +76,7 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 </div>
 
 <script>
-let alwaysOnTimer = null;
-let alwaysOnEndTime = null;
+let alwaysOnActive = false;
 
 function msg(text, ok) {
   const m = document.getElementById("msg");
@@ -90,49 +91,44 @@ function doubleConfirm(question) {
 }
 
 function updateAlwaysOnStatus() {
-  const s = document.getElementById("alwaysonStatus");
-  if (!alwaysOnEndTime) { s.textContent = ""; return; }
-  const now = Date.now();
-  if (now >= alwaysOnEndTime) { stopAlwaysOn(); return; }
-  const min = Math.ceil((alwaysOnEndTime - now) / 60000);
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  s.textContent = "Aktiv — noch " + (h>0 ? h+"h " : "") + m + "min";
-}
-
-async function sendWoL() {
-  try { await fetch("/wake", {method:"POST"}); } catch(e) {}
+  fetch("/alwayson").then(r=>r.json()).then(d=>{
+    const btn = document.getElementById("alwaysonBtn");
+    const s = document.getElementById("alwaysonStatus");
+    if (d.active) {
+      btn.classList.add("active");
+      btn.textContent = "⏹ Always On (aktiv)";
+      const h = Math.floor(d.remaining_min / 60);
+      const m = d.remaining_min % 60;
+      s.textContent = "Aktiv — noch " + (h>0 ? h+"h " : "") + m + "min";
+      alwaysOnActive = true;
+    } else {
+      btn.classList.remove("active");
+      btn.textContent = "🔄 Always On";
+      s.textContent = "";
+      alwaysOnActive = false;
+    }
+  });
 }
 
 function toggleAlwaysOn() {
-  if (alwaysOnTimer) { stopAlwaysOn(); return; }
+  if (alwaysOnActive) {
+    fetch("/alwayson/stop", {method:"POST"}).then(()=>updateAlwaysOnStatus());
+    return;
+  }
   let hours = parseInt(prompt("Wie viele Stunden? (0 = unbegrenzt, Standard: 24)", "24"));
   if (isNaN(hours) || hours < 0) return;
   if (hours === 0) hours = 9999;
   if (!doubleConfirm("Always On für " + (hours===9999 ? "unbegrenzt" : hours+"h") + " starten?")) return;
-  const btn = document.getElementById("alwaysonBtn");
-  btn.classList.add("active");
-  btn.textContent = "⏹ Always On (aktiv)";
-  alwaysOnEndTime = Date.now() + hours * 3600000;
-  sendWoL();
-  alwaysOnTimer = setInterval(sendWoL, 10 * 60 * 1000);
-  updateAlwaysOnStatus();
-  alwaysOnTimer._si = setInterval(updateAlwaysOnStatus, 30000);
+  fetch("/alwayson/start", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({hours: hours})
+  }).then(()=>updateAlwaysOnStatus());
 }
 
-function stopAlwaysOn() {
-  if (alwaysOnTimer) {
-    clearInterval(alwaysOnTimer);
-    if (alwaysOnTimer._si) clearInterval(alwaysOnTimer._si);
-    alwaysOnTimer = null;
-  }
-  alwaysOnEndTime = null;
-  const btn = document.getElementById("alwaysonBtn");
-  btn.classList.remove("active");
-  btn.textContent = "🔄 Always On";
-  document.getElementById("alwaysonStatus").textContent = "";
-  msg("Always On deaktiviert.", true);
-}
+// Poll status every 30s + initial load
+setInterval(updateAlwaysOnStatus, 30000);
+updateAlwaysOnStatus();
 
 async function wakePC() {
   const btn = event.target;
@@ -187,10 +183,57 @@ async function shutdownPC() {
 </body>
 </html>"""
 
+# ── Server-side Always-On Timer ──────────────────────────────────────
+
+WOL_MAC = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
+WOL_BROADCAST = os.environ.get("WOL_BROADCAST", "192.168.178.255")
+WOL_PORT = os.environ.get("WOL_PORT", "9")
+
+_alwayson_timer = None
+_alwayson_end = 0
+
+def _wol_cmd():
+    subprocess.run(["/usr/bin/wakeonlan", "-i", WOL_BROADCAST, "-p", WOL_PORT, WOL_MAC],
+                   capture_output=True, timeout=10)
+
+def _alwayson_loop(end_time):
+    global _alwayson_timer
+    while time.time() < end_time and _alwayson_timer is not None:
+        _wol_cmd()
+        for _ in range(600):
+            if _alwayson_timer is None or time.time() >= end_time:
+                break
+            time.sleep(1)
+
+def start_alwayson(hours):
+    global _alwayson_timer, _alwayson_end
+    stop_alwayson()
+    end = time.time() + hours * 3600
+    _alwayson_timer = threading.Thread(target=_alwayson_loop, args=(end,), daemon=True)
+    _alwayson_end = end
+    _wol_cmd()
+    _alwayson_timer.start()
+
+def stop_alwayson():
+    global _alwayson_timer, _alwayson_end
+    _alwayson_timer = None
+    _alwayson_end = 0
+
+def alwayson_status():
+    if _alwayson_timer and _alwayson_timer.is_alive():
+        remaining = max(0, int((_alwayson_end - time.time()) / 60))
+        return {"active": True, "remaining_min": remaining}
+    return {"active": False, "remaining_min": 0}
+
+# ── Handler ──────────────────────────────────────────────────────────
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._json({"status":"ok","host":socket.gethostname()})
+            return
+        if self.path == "/alwayson":
+            self._json(alwayson_status())
             return
         self.send_response(200)
         self.send_header("Content-Type","text/html; charset=utf-8")
@@ -205,8 +248,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._run_ssh_sleep()
         elif self.path == "/wake":
             self._run_wol()
+        elif self.path == "/alwayson/start":
+            self._alwayson_start()
+        elif self.path == "/alwayson/stop":
+            stop_alwayson()
+            self._json({"status":"ok","message":"Always On gestoppt."})
         else:
             self.send_error(404)
+
+    def _alwayson_start(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length)) if length > 0 else {}
+            hours = int(data.get("hours", 24))
+            if hours <= 0:
+                self._json({"status":"error","message":"Stunden > 0 erforderlich"}, code=400)
+                return
+            start_alwayson(hours)
+            self._json({"status":"ok","message":f"Always On gestartet ({hours}h)."})
+        except Exception as e:
+            self._json({"status":"error","message":str(e)}, code=500)
 
     def _run_ssh_sleep(self):
         try:
