@@ -34,7 +34,16 @@ h1 { color: #2dd4bf; margin-bottom: 1rem; }
 .btn-sleep:hover { background: #d97706; }
 .btn-shutdown { background: #ef4444; }
 .btn-shutdown:hover { background: #dc2626; }
+.btn-alwayson { background: #8b5cf6; }
+.btn-alwayson:hover { background: #7c3aed; }
+.btn-alwayson.active { background: #ec4899; animation: glow 2s infinite; }
+@keyframes glow { 0%, 100% { box-shadow: 0 0 8px #ec4899; } 50% { box-shadow: 0 0 20px #ec4899; } }
 .btn:disabled { background: #4b5563 !important; cursor: not-allowed; }
+.alwayson-status { margin-top: 0.5rem; font-size: 0.8rem; color: #ec4899; min-height: 1rem; }
+.setup-row { display: flex; gap: 0.5rem; align-items: center; justify-content: center; margin: 0.5rem 0; flex-wrap: wrap; }
+.setup-row input { background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; padding: 6px 10px; border-radius: 6px; width: 60px; text-align: center; font-size: 0.9rem; }
+.setup-row label { font-size: 0.85rem; color: #9ca3af; cursor: pointer; }
+.setup-row input[type=checkbox] { width: auto; margin: 0; }
 .msg { margin-top: 1rem; font-size: 0.85rem; min-height: 1.2rem; }
 .msg-ok { color: #22c55e; }
 .msg-err { color: #ef4444; }
@@ -50,6 +59,11 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 </div>
 
 <div class="actions">
+<button class="btn btn-alwayson" id="alwaysonBtn" onclick="toggleAlwaysOn()" title="Alle 10 Min WoL senden">🔄 Always On</button>
+</div>
+<div class="alwayson-status" id="alwaysonStatus"></div>
+
+<div class="actions">
 <button class="btn btn-wake" onclick="wakePC()" title="Magic Packet an PC senden">PC Aufwecken</button>
 <button class="btn btn-sleep" onclick="sleepPC()" title="PC in Standby versetzen">PC Schlafen</button>
 <button class="btn btn-shutdown" onclick="shutdownPC()" title="PC per SSH herunterfahren">PC Herunterfahren</button>
@@ -60,6 +74,9 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 </div>
 
 <script>
+let alwaysOnTimer = null;
+let alwaysOnEndTime = null;
+
 function msg(text, ok) {
   const m = document.getElementById("msg");
   m.textContent = text;
@@ -70,6 +87,51 @@ function doubleConfirm(question) {
   if (!confirm(question)) return false;
   if (!confirm("WIRKLICH? Nochmal bestätigen.")) return false;
   return true;
+}
+
+function updateAlwaysOnStatus() {
+  const s = document.getElementById("alwaysonStatus");
+  if (!alwaysOnEndTime) { s.textContent = ""; return; }
+  const now = Date.now();
+  if (now >= alwaysOnEndTime) { stopAlwaysOn(); return; }
+  const min = Math.ceil((alwaysOnEndTime - now) / 60000);
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  s.textContent = "Aktiv — noch " + (h>0 ? h+"h " : "") + m + "min";
+}
+
+async function sendWoL() {
+  try { await fetch("/wake", {method:"POST"}); } catch(e) {}
+}
+
+function toggleAlwaysOn() {
+  if (alwaysOnTimer) { stopAlwaysOn(); return; }
+  let hours = parseInt(prompt("Wie viele Stunden? (0 = unbegrenzt, Standard: 24)", "24"));
+  if (isNaN(hours) || hours < 0) return;
+  if (hours === 0) hours = 9999;
+  if (!doubleConfirm("Always On für " + (hours===9999 ? "unbegrenzt" : hours+"h") + " starten?")) return;
+  const btn = document.getElementById("alwaysonBtn");
+  btn.classList.add("active");
+  btn.textContent = "⏹ Always On (aktiv)";
+  alwaysOnEndTime = Date.now() + hours * 3600000;
+  sendWoL();
+  alwaysOnTimer = setInterval(sendWoL, 10 * 60 * 1000);
+  updateAlwaysOnStatus();
+  alwaysOnTimer._si = setInterval(updateAlwaysOnStatus, 30000);
+}
+
+function stopAlwaysOn() {
+  if (alwaysOnTimer) {
+    clearInterval(alwaysOnTimer);
+    if (alwaysOnTimer._si) clearInterval(alwaysOnTimer._si);
+    alwaysOnTimer = null;
+  }
+  alwaysOnEndTime = null;
+  const btn = document.getElementById("alwaysonBtn");
+  btn.classList.remove("active");
+  btn.textContent = "🔄 Always On";
+  document.getElementById("alwaysonStatus").textContent = "";
+  msg("Always On deaktiviert.", true);
 }
 
 async function wakePC() {
