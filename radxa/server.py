@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Radxa Web Server mit Shutdown-Button."""
+"""Radxa Web Server mit PC-Power-Control."""
 import http.server
 import socket
 import os
@@ -34,6 +34,8 @@ h1 { color: #2dd4bf; margin-bottom: 1rem; }
 .btn-wake:hover { background: #16a34a; }
 .btn-sleep { background: #f59e0b; }
 .btn-sleep:hover { background: #d97706; }
+.btn-reboot { background: #3b82f6; }
+.btn-reboot:hover { background: #2563eb; }
 .btn-shutdown { background: #ef4444; }
 .btn-shutdown:hover { background: #dc2626; }
 .btn-alwayson { background: #8b5cf6; }
@@ -68,6 +70,7 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 <div class="actions">
 <button class="btn btn-wake" onclick="wakePC()" title="Magic Packet an PC senden">PC Aufwecken</button>
 <button class="btn btn-sleep" onclick="sleepPC()" title="PC in Standby versetzen">PC Schlafen</button>
+<button class="btn btn-reboot" onclick="rebootPC()" title="PC per SSH neu starten">PC Neustarten</button>
 <button class="btn btn-shutdown" onclick="shutdownPC()" title="PC per SSH herunterfahren">PC Herunterfahren</button>
 </div>
 <div class="msg" id="msg"></div>
@@ -163,6 +166,23 @@ async function sleepPC() {
   btn.textContent = "PC Schlafen";
 }
 
+async function rebootPC() {
+  if (!doubleConfirm("PC wirklich neu starten?")) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = "Starte neu...";
+  msg("");
+  try {
+    const r = await fetch("/reboot", {method:"POST"});
+    const d = await r.json();
+    msg(d.message || "OK", d.status === "ok");
+  } catch(e) {
+    msg("Neustart wurde vermutlich bereits eingeleitet.", true);
+  }
+  btn.disabled = false;
+  btn.textContent = "PC Neustarten";
+}
+
 async function shutdownPC() {
   if (!doubleConfirm("PC wirklich herunterfahren?")) return;
   const btn = event.target;
@@ -244,6 +264,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/shutdown":
             self._run_ssh_shutdown()
+        elif self.path == "/reboot":
+            self._run_ssh_reboot()
         elif self.path == "/sleep":
             self._run_ssh_sleep()
         elif self.path == "/wake":
@@ -299,6 +321,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json({"status":"error","message":r.stderr.strip() or "Fehler"}, code=500)
         except subprocess.TimeoutExpired:
             self._json({"status":"ok","message":"PC antwortet nicht mehr — vermutlich aus."})
+        except Exception as e:
+            self._json({"status":"error","message":str(e)}, code=500)
+
+    def _run_ssh_reboot(self):
+        try:
+            r = subprocess.run([
+                "ssh", "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=5", "-p", "2222",
+                "amin@localhost", "reboot"
+            ], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                self._json({"status":"ok","message":"Neustart eingeleitet."})
+            else:
+                self._json({"status":"error","message":r.stderr.strip() or "Fehler"}, code=500)
+        except subprocess.TimeoutExpired:
+            self._json({"status":"ok","message":"PC antwortet nicht mehr — Neustart vermutlich eingeleitet."})
         except Exception as e:
             self._json({"status":"error","message":str(e)}, code=500)
 

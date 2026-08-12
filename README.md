@@ -1,6 +1,6 @@
 # Radxa ROCK 2A Gateway
 
-Webserver auf dem Radxa ROCK 2A mit PC-Shutdown/Steuerung per Web-UI.
+Webserver auf dem Radxa ROCK 2A mit PC-Wake, Standby, Reboot und Shutdown per Web-UI. Reboot und andere destruktive Aktionen verwenden eine doppelte Bestätigung.
 
 ## Aufbau
 
