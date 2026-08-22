@@ -4,6 +4,7 @@ import http.server
 import socket
 import os
 import json
+import queue
 import subprocess
 import threading
 import time
@@ -63,7 +64,7 @@ a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
 </div>
 
 <div class="actions">
-<button class="btn btn-alwayson" id="alwaysonBtn" onclick="toggleAlwaysOn()" title="Alle 10 Min WoL senden">🔄 Always On</button>
+<button class="btn btn-alwayson" id="alwaysonBtn" onclick="toggleAlwaysOn()" title="PC-Standby blockieren + alle 10 Min WoL senden">🔄 Always On</button>
 </div>
 <div class="alwayson-status" id="alwaysonStatus"></div>
 
@@ -102,7 +103,10 @@ function updateAlwaysOnStatus() {
       btn.textContent = "⏹ Always On (aktiv)";
       const h = Math.floor(d.remaining_min / 60);
       const m = d.remaining_min % 60;
-      s.textContent = "Aktiv — noch " + (h>0 ? h+"h " : "") + m + "min";
+      const protection = d.inhibitor_active
+        ? "🛡 PC-Schlafschutz aktiv"
+        : "⏳ WoL aktiv — verbinde PC-Schlafschutz";
+      s.textContent = protection + " — noch " + (h>0 ? h+"h " : "") + m + "min";
       alwaysOnActive = true;
     } else {
       btn.classList.remove("active");
@@ -115,7 +119,8 @@ function updateAlwaysOnStatus() {
 
 function toggleAlwaysOn() {
   if (alwaysOnActive) {
-    fetch("/alwayson/stop", {method:"POST"}).then(()=>updateAlwaysOnStatus());
+    fetch("/alwayson/stop", {method:"POST"})
+      .then(r=>r.json()).then(d=>{ msg(d.message || "Always On gestoppt.", d.status === "ok"); updateAlwaysOnStatus(); });
     return;
   }
   let hours = parseInt(prompt("Wie viele Stunden? (0 = unbegrenzt, Standard: 24)", "24"));
@@ -126,7 +131,10 @@ function toggleAlwaysOn() {
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({hours: hours})
-  }).then(()=>updateAlwaysOnStatus());
+  }).then(r=>r.json()).then(d=>{
+    msg(d.message || "Always On gestartet.", d.status === "ok");
+    updateAlwaysOnStatus();
+  }).catch(e=>msg("Always-On-Fehler: " + e, false));
 }
 
 // Poll status every 30s + initial load
@@ -208,42 +216,185 @@ async function shutdownPC() {
 WOL_MAC = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
 WOL_BROADCAST = os.environ.get("WOL_BROADCAST", "192.168.178.255")
 WOL_PORT = os.environ.get("WOL_PORT", "9")
+PC_SSH_USER = os.environ.get("PC_SSH_USER", "amin")
+PC_SSH_PORT = os.environ.get("PC_SSH_PORT", "2222")
+PC_UID = os.environ.get("PC_UID", "1000")
+PC_INHIBIT_HELPER = os.environ.get(
+    "PC_INHIBIT_HELPER",
+    "/home/amin/.local/share/radxa-gateway/plasma_suspend_helper.py",
+)
 
 _alwayson_timer = None
 _alwayson_end = 0
+_alwayson_stop_event = None
+_alwayson_inhibitor = None
+_alwayson_inhibitor_error = ""
+_alwayson_lock = threading.RLock()
 
 def _wol_cmd():
-    subprocess.run(["/usr/bin/wakeonlan", "-i", WOL_BROADCAST, "-p", WOL_PORT, WOL_MAC],
-                   capture_output=True, timeout=10)
+    try:
+        result = subprocess.run(
+            ["/usr/bin/wakeonlan", "-i", WOL_BROADCAST, "-p", WOL_PORT, WOL_MAC],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"[Always-On] WoL failed: {result.stderr.strip()}", flush=True)
+            return False
+        return True
+    except Exception as exc:
+        print(f"[Always-On] WoL failed: {exc}", flush=True)
+        return False
 
-def _alwayson_loop(end_time):
-    global _alwayson_timer
-    while time.time() < end_time and _alwayson_timer is not None:
-        _wol_cmd()
-        for _ in range(600):
-            if _alwayson_timer is None or time.time() >= end_time:
-                break
-            time.sleep(1)
+def _readline_with_timeout(stream, timeout=9.0):
+    result = queue.Queue(maxsize=1)
+
+    def read_line():
+        try:
+            result.put(stream.readline())
+        except Exception:
+            result.put("")
+
+    threading.Thread(target=read_line, daemon=True).start()
+    try:
+        return result.get(timeout=timeout)
+    except queue.Empty:
+        return ""
+
+def _pc_inhibitor_running():
+    with _alwayson_lock:
+        return _alwayson_inhibitor is not None and _alwayson_inhibitor.poll() is None
+
+def _start_pc_inhibitor():
+    """Start the same KDE suspend-only holder used by ComfyUI."""
+    global _alwayson_inhibitor, _alwayson_inhibitor_error
+    with _alwayson_lock:
+        if _alwayson_inhibitor is not None and _alwayson_inhibitor.poll() is None:
+            return True
+        _alwayson_inhibitor = None
+        command = [
+            "ssh", "-T", "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
+            "-p", PC_SSH_PORT, f"{PC_SSH_USER}@localhost",
+            "env", f"XDG_RUNTIME_DIR=/run/user/{PC_UID}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{PC_UID}/bus",
+            "/usr/bin/python3", PC_INHIBIT_HELPER,
+            "Radxa-Always-On", "Always-On-active",
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            cookie = _readline_with_timeout(process.stdout).strip() if process.stdout else ""
+            if process.poll() is not None or not cookie.isdigit():
+                try:
+                    process.terminate()
+                    _, stderr = process.communicate(timeout=2)
+                except Exception:
+                    process.kill()
+                    stderr = ""
+                _alwayson_inhibitor_error = stderr.strip() or "PC/PowerDevil noch nicht erreichbar"
+                print(f"[Always-On] inhibitor pending: {_alwayson_inhibitor_error}", flush=True)
+                return False
+            _alwayson_inhibitor = process
+            _alwayson_inhibitor_error = ""
+            print(f"[Always-On] KDE suspend-only inhibitor active (cookie {cookie})", flush=True)
+            return True
+        except Exception as exc:
+            _alwayson_inhibitor_error = str(exc)
+            print(f"[Always-On] inhibitor failed: {exc}", flush=True)
+            return False
+
+def _stop_pc_inhibitor():
+    global _alwayson_inhibitor, _alwayson_inhibitor_error
+    with _alwayson_lock:
+        process = _alwayson_inhibitor
+        _alwayson_inhibitor = None
+        _alwayson_inhibitor_error = ""
+        if process is None:
+            return
+        try:
+            if process.stdin:
+                process.stdin.write("\n")
+                process.stdin.flush()
+            process.wait(timeout=3)
+        except Exception:
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+        print("[Always-On] KDE suspend-only inhibitor released", flush=True)
+
+def _alwayson_loop(end_time, stop_event):
+    global _alwayson_timer, _alwayson_end, _alwayson_stop_event
+    next_wol = time.time() + 600
+    next_inhibitor_check = time.time() + 15
+    try:
+        while time.time() < end_time and not stop_event.is_set():
+            now = time.time()
+            if now >= next_wol:
+                _wol_cmd()
+                next_wol = now + 600
+            if now >= next_inhibitor_check:
+                if not _pc_inhibitor_running():
+                    _start_pc_inhibitor()
+                next_inhibitor_check = now + 15
+            stop_event.wait(1)
+    finally:
+        with _alwayson_lock:
+            if _alwayson_stop_event is stop_event:
+                _alwayson_timer = None
+                _alwayson_end = 0
+                _alwayson_stop_event = None
+                _stop_pc_inhibitor()
 
 def start_alwayson(hours):
-    global _alwayson_timer, _alwayson_end
+    global _alwayson_timer, _alwayson_end, _alwayson_stop_event
     stop_alwayson()
     end = time.time() + hours * 3600
-    _alwayson_timer = threading.Thread(target=_alwayson_loop, args=(end,), daemon=True)
-    _alwayson_end = end
+    stop_event = threading.Event()
+    thread = threading.Thread(target=_alwayson_loop, args=(end, stop_event), daemon=True)
+    with _alwayson_lock:
+        _alwayson_timer = thread
+        _alwayson_end = end
+        _alwayson_stop_event = stop_event
     _wol_cmd()
-    _alwayson_timer.start()
+    inhibitor_active = _start_pc_inhibitor()
+    thread.start()
+    return inhibitor_active
 
 def stop_alwayson():
-    global _alwayson_timer, _alwayson_end
-    _alwayson_timer = None
-    _alwayson_end = 0
+    global _alwayson_timer, _alwayson_end, _alwayson_stop_event
+    with _alwayson_lock:
+        stop_event = _alwayson_stop_event
+        _alwayson_timer = None
+        _alwayson_end = 0
+        _alwayson_stop_event = None
+        if stop_event is not None:
+            stop_event.set()
+        _stop_pc_inhibitor()
 
 def alwayson_status():
-    if _alwayson_timer and _alwayson_timer.is_alive():
-        remaining = max(0, int((_alwayson_end - time.time()) / 60))
-        return {"active": True, "remaining_min": remaining}
-    return {"active": False, "remaining_min": 0}
+    with _alwayson_lock:
+        active = _alwayson_timer is not None and _alwayson_timer.is_alive()
+        remaining = max(0, int((_alwayson_end - time.time()) / 60)) if active else 0
+        inhibitor_active = _pc_inhibitor_running()
+        return {
+            "active": active,
+            "remaining_min": remaining,
+            "inhibitor_active": inhibitor_active,
+            "inhibitor_backend": "kde-powerdevil-suspend-only" if inhibitor_active else None,
+            "inhibitor_error": _alwayson_inhibitor_error,
+        }
 
 # ── Handler ──────────────────────────────────────────────────────────
 
@@ -286,8 +437,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if hours <= 0:
                 self._json({"status":"error","message":"Stunden > 0 erforderlich"}, code=400)
                 return
-            start_alwayson(hours)
-            self._json({"status":"ok","message":f"Always On gestartet ({hours}h)."})
+            inhibitor_active = start_alwayson(hours)
+            message = (
+                f"Always On gestartet ({hours}h): PC-Schlafschutz aktiv."
+                if inhibitor_active else
+                f"Always On gestartet ({hours}h): PC wird geweckt; Schlafschutz verbindet automatisch."
+            )
+            self._json({"status":"ok","message":message, **alwayson_status()})
         except Exception as e:
             self._json({"status":"error","message":str(e)}, code=500)
 

@@ -2,6 +2,8 @@
 
 Webserver auf dem Radxa ROCK 2A mit PC-Wake, Standby, Reboot und Shutdown per Web-UI. Reboot und andere destruktive Aktionen verwenden eine doppelte Bestätigung.
 
+**Always On** sendet weiterhin alle 10 Minuten WoL und hält zusätzlich denselben KDE-PowerDevil-Suspend-only-Inhibitor wie der ComfyUI Queue Guard. Dadurch wird der automatische PC-Standby blockiert, während Bildschirmabschaltung und Sperren erlaubt bleiben.
+
 ## Aufbau
 
 ```
@@ -40,6 +42,9 @@ cat radxa_id_ed25519.pub >> ~/.ssh/authorized_keys
 
 # Reverse-Tunnel:
 cp pc/radxa-tunnel.service ~/.config/systemd/user/
+# PowerDevil Suspend-only Helper (benötigt systemweites Python mit dbus):
+install -Dm755 pc/plasma_suspend_helper.py ~/.local/share/radxa-gateway/plasma_suspend_helper.py
+/usr/bin/python3 -c 'import dbus'
 # Key-Pair für Tunnel generieren:
 ssh-keygen -t ed25519 -f ~/.ssh/radxa_tunnel -N ""
 ssh-copy-id -i ~/.ssh/radxa_tunnel.pub radxa@192.168.178.159
