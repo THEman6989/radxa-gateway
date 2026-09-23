@@ -469,7 +469,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             r = subprocess.run([
                 "ssh", "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=5", "-p", "2222",
-                "amin@localhost", "loginctl poweroff"
+                "amin@localhost", "sudo -n /usr/bin/systemctl poweroff"
             ], capture_output=True, text=True, timeout=15)
             if r.returncode == 0:
                 self._json({"status":"ok","message":"Shutdown eingeleitet."})

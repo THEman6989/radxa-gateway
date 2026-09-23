@@ -49,7 +49,13 @@ install -Dm755 pc/plasma_suspend_helper.py ~/.local/share/radxa-gateway/plasma_s
 ssh-keygen -t ed25519 -f ~/.ssh/radxa_tunnel -N ""
 ssh-copy-id -i ~/.ssh/radxa_tunnel.pub radxa@192.168.178.159
 systemctl --user enable --now radxa-tunnel.service
-loginctl enable-linger
+sudo loginctl enable-linger amin
+
+# Power-Aktionen funktionieren damit auch vor dem ersten Desktop-Login:
+echo "amin ALL=(root) NOPASSWD: /usr/bin/systemctl suspend, /usr/bin/systemctl poweroff" \
+  | sudo tee /etc/sudoers.d/amin-radxa-power
+sudo chmod 440 /etc/sudoers.d/amin-radxa-power
+sudo visudo -cf /etc/sudoers.d/amin-radxa-power
 ```
 
 ## WoL aktivieren (PC, einmalig)
