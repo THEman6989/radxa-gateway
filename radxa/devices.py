@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 import shlex
 import time
+from mi50_safety import Safety
 
 
 class Fleet:
@@ -14,6 +15,8 @@ class Fleet:
         self.main = main
         self.locks = {key: threading.Lock() for key in config}
         self.holders = {}
+        mi50 = config.get('mi50', {})
+        self.safety = Safety(mi50['watchdog_config'], mi50['power_state']) if mi50.get('watchdog_config') else None
 
     def ssh(self, device, command):
         args = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
@@ -38,10 +41,14 @@ class Fleet:
         if not self.locks[key].acquire(blocking=False):
             return {'status': 'error', 'message': 'Für dieses Gerät läuft bereits eine Aktion.'}
         try:
+            if key == 'mi50' and self.safety and self.safety.pending():
+                return {'status': 'error', 'message': 'Hard-Off läuft oder sein Ergebnis muss nach Gateway-Neustart geprüft werden. Keine überlappende Power-Aktion.'}
             if action != 'wake' and self.alwayson(key)['active']:
                 return {'status': 'error', 'message': 'Bitte zuerst Always On für dieses Gerät beenden.'}
             if action in ('sleep', 'shutdown', 'reboot'):
                 self.pause_watchdog(d)
+                if key == 'mi50' and self.safety:
+                    self.safety.intent(action)
             if action == 'wake':
                 cmd = ['/usr/bin/wakeonlan', '-i', d.get('broadcast', '192.168.178.255'),
                        '-p', '9', d['mac']]
@@ -168,6 +175,7 @@ class Fleet:
         return {'checked_at': time.time(), 'devices': [
             {'id': key, 'name': device['name'], 'online': up,
              'alwayson': self.alwayson(key), 'note': device.get('note', ''),
+             'health': self.safety.status(up) if key == 'mi50' and self.safety else None,
              'watchdog_paused': Path(device['pause_file']).exists() if device.get('pause_file') else None}
             for (key, device), up in zip(entries, online)
         ]}

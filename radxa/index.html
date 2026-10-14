@@ -9,7 +9,10 @@
 <button class="tab" role="tab" id="tab-unraid" aria-controls="panel" aria-selected="false" data-device="unraid"><strong>Unraid-PC</strong><span class="state"><i class="dot"></i>Prüfe …</span></button>
 </nav><section id="panel" role="tabpanel" aria-labelledby="tab-main"><div class="detail"><h2 id="name">Haupt-PC</h2><span id="status" class="badge">Prüfe …</span></div><p id="note" class="muted note">Status wird geladen.</p>
 <div class="actions"><button class="btn wake" data-action="wake">Aufwecken</button><button class="btn sleep" data-action="sleep">Schlafen</button><button class="btn reboot" data-action="reboot">Neustarten</button><button class="btn shutdown" data-action="shutdown">Herunterfahren</button></div>
-<button class="btn always" id="alwaysonBtn">↻ Always On</button><div class="always-status" id="alwaysStatus"></div><div class="msg" id="msg" role="status" aria-live="polite"></div></section>
+<button class="btn always" id="alwaysonBtn">↻ Always On</button><div class="always-status" id="alwaysStatus"></div>
+<aside id="mi50Health" hidden aria-live="polite" style="margin-top:16px;padding:14px;border:1px solid #525252;border-radius:10px;line-height:1.6;font-size:13px"><strong id="healthText"></strong><pre id="healthEvidence" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px"></pre><p id="hardoffStatus"></p><a href="https://rock-2a.tail852b38.ts.net:4444/" target="_blank" rel="noopener" style="color:#5eead4">KVM öffnen ↗</a></aside>
+<button class="btn shutdown" id="hardoffBtn" hidden style="width:100%;margin-top:14px;border:1px solid #f87171">⚠ Hard Off · 8 Sekunden Power-Taste</button>
+<div class="msg" id="msg" role="status" aria-live="polite"></div></section>
 <footer><span id="checked">Verbindung wird geprüft …</span><br>Online = im Netzwerk erreichbar. „Nicht erreichbar“ kann auch Standby oder ein Netzwerkproblem bedeuten. Always On läuft auf dem Gateway, auch bei geschlossenem Tab.</footer></main>
 <script>
 let selected='main', devices={}, busy=false, fresh=false;
@@ -17,7 +20,7 @@ const names={main:'Haupt-PC',mi50:'MI50-PC',unraid:'Unraid-PC'};
 const messages={};
 const $=id=>document.getElementById(id);
 function render(){
- document.querySelectorAll('[data-device]').forEach(tab=>{const d=devices[tab.dataset.device];tab.setAttribute('aria-selected',String(tab.dataset.device===selected));tab.classList.remove('online','offline');if(fresh&&d)tab.classList.add(d.online?'online':'offline');tab.querySelector('.state').innerHTML='<i class="dot"></i>'+(fresh&&d?(d.online?'Online':'Nicht erreichbar'):'Status unbekannt');});
+ document.querySelectorAll('[data-device]').forEach(tab=>{const d=devices[tab.dataset.device];tab.setAttribute('aria-selected',String(tab.dataset.device===selected));tab.classList.remove('online','offline');if(fresh&&d)tab.classList.add(d.online?'online':'offline');const warning=fresh&&d?.health&&['danger','warning'].includes(d.health.level);tab.style.borderColor=warning?(d.health.level==='danger'?'#f87171':'#fbbf24'):'';tab.querySelector('.state').innerHTML='<i class="dot"></i>'+(warning?'⚠ Problem':fresh&&d?(d.online?'Online':'Nicht erreichbar'):'Status unbekannt');});
  const d=devices[selected], a=d?.alwayson;
  $('name').textContent=names[selected];$('panel').setAttribute('aria-labelledby','tab-'+selected);
  $('status').textContent=fresh&&d?(d.online?'● Online':'● Nicht erreichbar'):'Status unbekannt';
@@ -25,19 +28,28 @@ function render(){
  $('alwaysonBtn').classList.toggle('active',Boolean(a?.active));$('alwaysonBtn').textContent=a?.active?'■ Always On beenden':'↻ Always On';
  $('alwaysStatus').textContent=a?.active?((a.inhibitor_active?'Schlafschutz aktiv':'Schlafschutz verbindet …')+' · noch '+Math.ceil(a.remaining_min/60)+' h'):'Schlafschutz und regelmäßiges Wake-on-LAN für dieses Gerät.';
  document.querySelectorAll('.btn').forEach(b=>{b.disabled=busy||!fresh||!d||(Boolean(a?.active)&&['sleep','shutdown','reboot'].includes(b.dataset.action));});
+ const health=d?.health, hard=health?.hardoff;
+ $('mi50Health').hidden=selected!=='mi50';$('hardoffBtn').hidden=selected!=='mi50';
+ $('healthText').textContent=fresh?(health?.message||'Wächterstatus unbekannt.'):'Wächterstatus unbekannt — Gateway-Abfrage fehlgeschlagen.';
+ $('healthEvidence').textContent=fresh?(health?.evidence||''):'';
+ $('mi50Health').style.borderColor=health?.level==='danger'?'#f87171':health?.level==='warning'?'#fbbf24':'#525252';
+ $('hardoffStatus').textContent=hard?.message||'Hard Off funktioniert über den unabhängigen Controller, auch bei eingefrorenem Ubuntu. Datenverlust möglich.';
+ if(selected==='mi50'&&hard?.status==='pending'){document.querySelectorAll('.btn').forEach(b=>b.disabled=true);}
+ $('hardoffBtn').disabled=busy||!fresh||['pending','unknown'].includes(hard?.status);
  const m=messages[selected];$('msg').textContent=m?.text||'';$('msg').className='msg '+(m?.ok?'ok':'error');
 }
 async function refresh(){try{const r=await fetch('/api/devices',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw Error(r.status);const state=await r.json();devices=Object.fromEntries(state.devices.map(d=>[d.id,d]));fresh=true;$('checked').textContent='Zuletzt geprüft: '+new Date(state.checked_at*1000).toLocaleTimeString('de-DE');}catch(e){fresh=false;$('checked').textContent='Statusabfrage fehlgeschlagen — Verbindung prüfen.';}render();}
 function doubleConfirm(q){return confirm(q)&&confirm('WIRKLICH? '+q);}
 async function action(action,body){
  const target=selected,name=names[target];
- if(action!=='wake'&&!doubleConfirm(name+': '+({'sleep':'in Standby versetzen','reboot':'neu starten','shutdown':'herunterfahren','alwayson/start':'Always On starten','alwayson/stop':'Always On beenden'}[action])+'?'+(target==='mi50'&&['sleep','shutdown','reboot'].includes(action)?' Der Recovery-Watchdog wird pausiert.':'')))return;
+ if(action!=='wake'&&!doubleConfirm(name+': '+({'hardoff':'HART AUSSCHALTEN (Power-Taste 8 Sekunden halten, Datenverlust möglich; Always On wird beendet)', 'sleep':'in Standby versetzen','reboot':'neu starten','shutdown':'herunterfahren','alwayson/start':'Always On starten','alwayson/stop':'Always On beenden'}[action])+'?'+(target==='mi50'&&['sleep','shutdown','reboot'].includes(action)?' Der Recovery-Watchdog wird pausiert.':'')))return;
  busy=true;messages[target]={text:'Befehl an '+name+' wird gesendet …',ok:true};render();
  try{const r=await fetch('/api/devices/'+target+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{}),signal:AbortSignal.timeout(30000)});const data=await r.json();messages[target]={text:data.message||'Keine Rückmeldung.',ok:data.status==='ok'};}catch(e){messages[target]={text:'Keine sichere Rückmeldung. Status prüfen; Aktion nicht blind wiederholen.',ok:false};}
  await refresh();busy=false;render();
 }
 document.querySelectorAll('[data-device]').forEach(tab=>{tab.onclick=()=>{selected=tab.dataset.device;render();};});
 document.querySelectorAll('[data-action]').forEach(btn=>{btn.onclick=()=>action(btn.dataset.action);});
+$('hardoffBtn').onclick=()=>action('hardoff',{confirm_hardoff:true});
 $('alwaysonBtn').onclick=()=>{if(devices[selected]?.alwayson?.active){action('alwayson/stop');return;}const input=prompt(names[selected]+': Wie viele Stunden? (0 = unbegrenzt)','24');if(input===null)return;const hours=Number(input);if(input.trim()===''||!Number.isInteger(hours)||hours<0||hours>9999){alert('Bitte 0 bis 9999 ganze Stunden eingeben.');return;}action('alwayson/start',{hours});};
 async function poll(){await refresh();setTimeout(poll,5000);}poll();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});

@@ -249,7 +249,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             action = '/'.join(parts[4:])
             try:
-                if action == 'alwayson/start':
+                if action == 'hardoff' and key == 'mi50' and fleet.safety:
+                    length = int(self.headers.get('Content-Length', 0))
+                    if not 0 < length <= 1024:
+                        raise ValueError('Explizite Hard-Off-Bestätigung erforderlich')
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict) or data.get('confirm_hardoff') is not True:
+                        raise ValueError('Explizite Hard-Off-Bestätigung erforderlich')
+                    fleet.stop('mi50')
+                    result = fleet.safety.start_hardoff(lambda: fleet.pause_watchdog(fleet.config['mi50']))
+                elif action == 'alwayson/start':
                     length = int(self.headers.get('Content-Length', 0))
                     if not 0 < length <= 1024:
                         raise ValueError('Ungültige Anfragegröße')

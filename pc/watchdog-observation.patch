@@ -1,0 +1,27 @@
+--- external_watchdog.py
++++ external_watchdog.py
+@@ -41,7 +41,7 @@
+                 status = self.state.get('status', 'awaiting-new-boot')
+             else:
+                 status = 'armed'
+-            self.state.update(boot=parts[2],last_heartbeat=time.time(),status=status)
++            self.state.update(boot=parts[2],last_heartbeat=time.time(),status=status,system_state=self.system_state)
+             if now-self.last_write >= 2 or not self.path.exists():
+                 self.save(); self.last_write=now
+             return
+@@ -68,6 +68,10 @@
+                 evidence = json.dumps(self.inventory.last, sort_keys=True)
+                 self.trigger(reason, evidence, now)
+             return  # Invalid protocol content must never fall through to the kernel FAULT regex.
++        # Passive evidence remains available even when intentional shutdown pauses recovery.
++        if self.guard.boot and FAULT.search(line):
++            self.state['observed_fault'] = {'boot': self.guard.boot, 'at': time.time(), 'evidence': line[:400]}
++            self.save()
+         reason = self.guard.line(line, now)
+         if reason:self.trigger(reason, line, now)
+     def check(self, now):
+@@ -235,4 +239,4 @@
+ if __name__=='__main__':
+     import argparse
+     parser=argparse.ArgumentParser();parser.add_argument('--config',required=True)
+-    args=parser.parse_args();run(args.config)+    args=parser.parse_args();run(args.config)

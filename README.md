@@ -17,7 +17,7 @@ Browser ──→ Radxa (192.168.178.159:4000) ──→ PC-Steuerung
 
 ```bash
 # Dateien auf den Radxa kopieren:
-scp radxa/server.py radxa/devices.py radxa/devices.json radxa/index.html radxa@192.168.178.159:~/www/
+scp radxa/server.py radxa/devices.py radxa/devices.json radxa/index.html radxa/mi50_safety.py radxa@192.168.178.159:~/www/
 scp radxa/radxa-webserver.service radxa@192.168.178.159:~/.config/systemd/user/
 
 # Service aktivieren:
@@ -136,6 +136,50 @@ MI50-Power-Aktionen setzen vor sleep, reboot oder shutdown die lokale Pause-Date
 des externen Radxa-Watchdogs. Diese Pause bleibt sichtbar und wird nicht beim
 Aufwecken ungefragt aufgehoben. Die globale Watchdog-Konfiguration bleibt unverändert.
 Always-On-Timer laufen serverseitig, überleben aber keinen Gateway-Service-Neustart.
+
+## MI50: Fehleranzeige und Hard Off
+
+Der MI50-Tab zeigt neben Netzwerk-Erreichbarkeit einen separaten Wächterstatus.
+Lebenszeichen älter als 15 Sekunden ergeben eine Warnung, nicht die Behauptung
+„definitiv eingefroren“. Ein bekannter Shutdown/Reboot/Standby-Auftrag wird vor
+SSH-Dispatch mit Boot-ID und Zeit auf dem Radxa gespeichert. Nach 90 Sekunden
+erscheint bei weiterhin erreichbarem Host „Power-Aktion dauert zu lange“; wenn
+auch das Netzwerk fehlt, bleibt der Abschluss ausdrücklich unbestätigt. Reboot
+wird ohne neue Boot-ID nach 180 Sekunden als unbestätigt markiert. Ein neuer
+Boot lässt vorherige Aufträge/Fehler nicht erneut anschlagen.
+
+Der vorhandene externe Wächter speichert durch `pc/watchdog-observation.patch`
+zusätzlich `observed_fault` (Zeit, Boot-ID, Kerneltext) und `system_state`.
+Das ist reine Beobachtung: auch bei pausierter Recovery bleibt neue
+AMD-Fehlerevidenz erhalten; Recovery-Gates, Pausen und Limits bleiben unverändert.
+Alte Recovery-Felder `reason/evidence` sind **kein aktueller Fehler**. Fehler des
+aktuellen Boots werden fünf Minuten angezeigt, bei nachfolgendem Shutdown-Fault
+bis zur Klärung/neuem Boot. Der Patch ist für die vorhandene externe Installation
+unter `~/.local/lib/mi50-watchdog/` gedacht, kein zweiter Watchdog-Prozess.
+
+**Grenze:** Stoppt der Kernel, bevor der letzte Fehler über den SSH-Feed beim Radxa
+ankommt, fehlt konkrete AMD-Evidenz. Dann zeigt die Seite Lebenszeichenverlust
+bzw. unbestätigten Shutdown. Keine automatische Bildanalyse/OCR des KVM, keine
+physische Power-Telemetrie; deshalb bleibt ein KVM-Link zur visuellen Prüfung.
+
+`POST /api/devices/mi50/hardoff` benötigt `{"confirm_hardoff": true}` zusätzlich
+zu den zwei UI-Dialogen. Nur der MI50 unterstützt diesen Endpunkt. Always On
+wird beendet und der externe Recovery-Wächter bleibt für den bewussten Shutdown
+pausiert. Der Radxa nutzt die private vorhandene Watchdog-Controllerkonfiguration;
+kein Token gelangt in Browser/Repository. Es gibt keine Abhängigkeit von MI50-SSH.
+
+Ein Worker prüft Controller-ID `nodemcu-v3-main`, WLAN und leere Pending-Queue,
+sendet genau einmal `power-off` mit 8 Sekunden Hold, 0 Sekunden Wait und Delay,
+prüft ACK-Felder, wartet mindestens neun Sekunden und liest den Abschluss zurück.
+Der UI-Status meldet nur den bestätigten Tastendruck, nicht ungeprüft „PC ist aus“.
+`last_error` bleibt in der Statusantwort erhalten. Pending/unklare Ausgänge werden
+persistent gegen weitere Hard-Off-Dispatches gesperrt (auch nach Gateway-Neustart).
+Eine unklare Sperre muss nach Controller-/KVM-Prüfung administrativ aufgelöst werden;
+kein automatisches Wiederholen und kein implizites Wiedereinschalten.
+
+Die Tests mocken Controller/Power-Dispatch. Live-GET prüft Controlleridentität und
+Wächterdaten; ein echter Freeze oder 8-Sekunden-Hard-Off wird nicht für einen
+UI-Abnahmetest ausgelöst.
 
 Tests: `python3 -m unittest discover -s tests -v`. Destruktive Befehle werden im
 HTTP-Test gemockt; ein erfolgreicher Test ist kein realer Power-Cycle-Nachweis.

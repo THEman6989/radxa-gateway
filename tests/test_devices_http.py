@@ -6,6 +6,7 @@ import threading
 import unittest
 from unittest import mock
 import http.server
+import tempfile
 
 spec = importlib.util.spec_from_file_location('fleet_server', Path(__file__).parents[1] / 'radxa/server.py')
 server = importlib.util.module_from_spec(spec)
@@ -13,6 +14,11 @@ spec.loader.exec_module(server)
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        fleet = server.get_fleet()
+        self.old_safety = fleet.safety
+        from mi50_safety import Safety
+        fleet.safety = Safety(Path(self.temp.name)/'config.json', Path(self.temp.name)/'power.json')
         self.http = http.server.HTTPServer(('127.0.0.1', 0), server.Handler)
         self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
         self.thread.start()
@@ -23,6 +29,8 @@ class HTTPTests(unittest.TestCase):
         self.http.shutdown()
         self.http.server_close()
         self.thread.join()
+        server.get_fleet().safety = self.old_safety
+        self.temp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
         self.client.request(method, path, body=body, headers=headers or {})
@@ -61,6 +69,18 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertIn(expected, run.call_args.args[0])
             self.assertTrue(run.call_args.args[0][-1].endswith(' shutdown'))
+
+    def test_hardoff_confirmation_required_and_mi50_only(self):
+        code, _ = self.request('POST', '/api/devices/mi50/hardoff', '{}')
+        self.assertEqual(code, 400)
+        code, _ = self.request('POST', '/api/devices/unraid/hardoff', '{"confirm_hardoff":true}')
+        self.assertEqual(code, 404)
+
+    def test_confirmed_hardoff_dispatches_to_safety_not_ssh(self):
+        fleet=server.get_fleet()
+        with mock.patch.object(fleet.safety,'start_hardoff',return_value={'status':'ok','message':'queued'}) as start, mock.patch.object(fleet,'stop') as stop, mock.patch.object(server.subprocess,'run') as run:
+            code, _ = self.request('POST','/api/devices/mi50/hardoff','{"confirm_hardoff":true}')
+        self.assertEqual(code,200);start.assert_called_once();stop.assert_called_once_with('mi50');run.assert_not_called()
 
     def test_main_timeout_is_not_reported_as_success(self):
         import subprocess
