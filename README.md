@@ -17,7 +17,7 @@ Browser ──→ Radxa (192.168.178.159:4000) ──→ PC-Steuerung
 
 ```bash
 # Dateien auf den Radxa kopieren:
-scp radxa/server.py radxa@192.168.178.159:~/www/
+scp radxa/server.py radxa/devices.py radxa/devices.json radxa/index.html radxa@192.168.178.159:~/www/
 scp radxa/radxa-webserver.service radxa@192.168.178.159:~/.config/systemd/user/
 
 # Service aktivieren:
@@ -83,7 +83,59 @@ Zugriff ausschließlich über Tailscale:
 ```bash
 # Einmalig auf dem Radxa:
 sudo tailscale up --accept-routes --ssh --operator=radxa
-sudo tailscale serve --bg --https=443 http://localhost:4000
+sudo tailscale serve --bg --https=4443 http://localhost:4000
 ```
 
-Danach erreichbar unter: **https://rock-2a.tail852b38.ts.net**
+Danach erreichbar unter: **https://rock-2a.tail852b38.ts.net:4443/**
+
+## Mehrere PCs
+
+Oben stehen Haupt-PC, MI50-PC und Unraid-PC mit unabhängigem Erreichbarkeitsstatus.
+Der Status prüft parallel per Ping die jeweilige LAN-Adresse (`status_host`,
+sonst `host`); er beweist keine physische Stromversorgung und keine API-Bereitschaft.
+So erzeugt das Polling keine wiederholten unauthentifizierten SSH-Verbindungen. Die Anzeige aktualisiert sich alle fünf Sekunden und zeigt bei
+fehlgeschlagener Gateway-Abfrage ausdrücklich „Status unbekannt“.
+
+`radxa/devices.json` enthält ausschließlich serverseitige Gerätezuordnungen.
+`DEVICE_CONFIG_FILE` kann einen anderen Pfad setzen. Neue Endpunkte:
+
+- `GET /api/devices`: alle Geräte, Erreichbarkeit, Always-On-Zustand und Watchdog-Pause.
+- `POST /api/devices/{main|mi50|unraid}/{wake|sleep|reboot|shutdown}`
+- `POST /api/devices/{id}/alwayson/start` mit `{"hours": 24}` (0 = unbegrenzt, maximal 9999).
+- `POST /api/devices/{id}/alwayson/stop`
+
+Die bisherigen Endpunkte bleiben für den Haupt-PC erhalten. Destruktive Aktionen
+benötigen weiterhin zwei Bestätigungen; bei aktivem Always On sind sie im neuen
+Geräte-API bis zum Beenden des Schutzes gesperrt. Ein SSH-Timeout bedeutet
+„Ergebnis unklar“, niemals einen bestätigten Shutdown.
+
+### Zusätzliche Ziel-Helper
+
+MI50: `pc/linux-power.sh` root-owned als `/usr/local/sbin/radxa-power` installieren.
+Nur diesen geprüften Helper per sudo freigeben (kein beliebiges systemd-inhibit
+als root!). Der Helper akzeptiert ausschließlich check, sleep, reboot, shutdown
+und hold. hold hält einen sleep-Inhibitor bis zum Schließen der SSH-Eingabe.
+Wake-on-LAN muss auf der tatsächlichen NIC und im BIOS aktiviert sein.
+
+Unraid: `pc/unraid-power.sh` nach `/boot/config/radxa-gateway/power.sh` kopieren.
+Einen separaten SSH-Key mit folgender Einschränkung in der persistenten
+`/boot/config/ssh/root/authorized_keys` ergänzen:
+
+```text
+restrict,command="/bin/bash /boot/config/radxa-gateway/power.sh" ssh-ed25519 <PUBLIC-KEY>
+```
+
+Der Helper verwendet Unraids `/sbin/poweroff` bzw. `/sbin/reboot` und das bereits
+installierte Dynamix-S3-Plugin für Standby. Unraid-Always-On pausiert vorhandene
+automatische S3-Pluginprozesse und setzt nur selbst pausierte Prozesse mit noch
+passender PID-Startzeit beim Beenden fort. Neue Pluginprozesse werden sekündlich
+überprüft; dies ist kein universeller Kernel-Inhibitor und verhindert keine
+extern ausgelösten Sleep-/Power-Aktionen. Standby pausiert auch VMs/Container.
+
+MI50-Power-Aktionen setzen vor sleep, reboot oder shutdown die lokale Pause-Datei
+des externen Radxa-Watchdogs. Diese Pause bleibt sichtbar und wird nicht beim
+Aufwecken ungefragt aufgehoben. Die globale Watchdog-Konfiguration bleibt unverändert.
+Always-On-Timer laufen serverseitig, überleben aber keinen Gateway-Service-Neustart.
+
+Tests: `python3 -m unittest discover -s tests -v`. Destruktive Befehle werden im
+HTTP-Test gemockt; ein erfolgreicher Test ist kein realer Power-Cycle-Nachweis.

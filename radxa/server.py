@@ -9,208 +9,6 @@ import subprocess
 import threading
 import time
 
-HTML = """<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Radxa ROCK 2A - Gateway</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-       background: #0f0f0f; color: #f3f4f6; min-height: 100vh;
-       display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.card { background: #1a1a1a; border: 1px solid #2d2d2d; border-radius: 12px;
-        padding: 2rem; max-width: 600px; width: 90%; text-align: center; }
-h1 { color: #2dd4bf; margin-bottom: 1rem; }
-.status-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
-              background: #22c55e; margin-right: 8px; animation: pulse 2s infinite; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.info { margin-top: 1.5rem; font-size: 0.9rem; color: #9ca3af; }
-.info span { color: #f3f4f6; }
-.actions { margin-top: 2rem; display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-.btn { padding: 12px 28px; border: none; border-radius: 8px; font-size: 0.95rem;
-       cursor: pointer; transition: background 0.2s; color: white; }
-.btn-wake { background: #22c55e; }
-.btn-wake:hover { background: #16a34a; }
-.btn-sleep { background: #f59e0b; }
-.btn-sleep:hover { background: #d97706; }
-.btn-reboot { background: #3b82f6; }
-.btn-reboot:hover { background: #2563eb; }
-.btn-shutdown { background: #ef4444; }
-.btn-shutdown:hover { background: #dc2626; }
-.btn-alwayson { background: #8b5cf6; }
-.btn-alwayson:hover { background: #7c3aed; }
-.btn-alwayson.active { background: #ec4899; animation: glow 2s infinite; }
-@keyframes glow { 0%, 100% { box-shadow: 0 0 8px #ec4899; } 50% { box-shadow: 0 0 20px #ec4899; } }
-.btn:disabled { background: #4b5563 !important; cursor: not-allowed; }
-.alwayson-status { margin-top: 0.5rem; font-size: 0.8rem; color: #ec4899; min-height: 1rem; }
-.setup-row { display: flex; gap: 0.5rem; align-items: center; justify-content: center; margin: 0.5rem 0; flex-wrap: wrap; }
-.setup-row input { background: #2d2d2d; border: 1px solid #4b5563; color: #f3f4f6; padding: 6px 10px; border-radius: 6px; width: 60px; text-align: center; font-size: 0.9rem; }
-.setup-row label { font-size: 0.85rem; color: #9ca3af; cursor: pointer; }
-.setup-row input[type=checkbox] { width: auto; margin: 0; }
-.msg { margin-top: 1rem; font-size: 0.85rem; min-height: 1.2rem; }
-.msg-ok { color: #22c55e; }
-.msg-err { color: #ef4444; }
-a { color: #2dd4bf; text-decoration: none; font-size: 0.85rem; }
-</style>
-</head>
-<body>
-<div class="card">
-<h1><span class="status-dot"></span>Radxa ROCK 2A</h1>
-<p>Gateway-Server</p>
-<div class="info">
-<p>Host: <span>{host}</span> &middot; Port: <span>{port}</span></p>
-</div>
-
-<div class="actions">
-<button class="btn btn-alwayson" id="alwaysonBtn" onclick="toggleAlwaysOn()" title="PC-Standby blockieren + alle 10 Min WoL senden">🔄 Always On</button>
-</div>
-<div class="alwayson-status" id="alwaysonStatus"></div>
-
-<div class="actions">
-<button class="btn btn-wake" onclick="wakePC()" title="Magic Packet an PC senden">PC Aufwecken</button>
-<button class="btn btn-sleep" onclick="sleepPC()" title="PC in Standby versetzen">PC Schlafen</button>
-<button class="btn btn-reboot" onclick="rebootPC()" title="PC per SSH neu starten">PC Neustarten</button>
-<button class="btn btn-shutdown" onclick="shutdownPC()" title="PC per SSH herunterfahren">PC Herunterfahren</button>
-</div>
-<div class="msg" id="msg"></div>
-
-<p style="margin-top:1.5rem"><a href="/health">/health</a></p>
-</div>
-
-<script>
-let alwaysOnActive = false;
-
-function msg(text, ok) {
-  const m = document.getElementById("msg");
-  m.textContent = text;
-  m.className = "msg " + (ok ? "msg-ok" : "msg-err");
-}
-
-function doubleConfirm(question) {
-  if (!confirm(question)) return false;
-  if (!confirm("WIRKLICH? Nochmal bestätigen.")) return false;
-  return true;
-}
-
-function updateAlwaysOnStatus() {
-  fetch("/alwayson").then(r=>r.json()).then(d=>{
-    const btn = document.getElementById("alwaysonBtn");
-    const s = document.getElementById("alwaysonStatus");
-    if (d.active) {
-      btn.classList.add("active");
-      btn.textContent = "⏹ Always On (aktiv)";
-      const h = Math.floor(d.remaining_min / 60);
-      const m = d.remaining_min % 60;
-      const protection = d.inhibitor_active
-        ? "🛡 PC-Schlafschutz aktiv"
-        : "⏳ WoL aktiv — verbinde PC-Schlafschutz";
-      s.textContent = protection + " — noch " + (h>0 ? h+"h " : "") + m + "min";
-      alwaysOnActive = true;
-    } else {
-      btn.classList.remove("active");
-      btn.textContent = "🔄 Always On";
-      s.textContent = "";
-      alwaysOnActive = false;
-    }
-  });
-}
-
-function toggleAlwaysOn() {
-  if (alwaysOnActive) {
-    fetch("/alwayson/stop", {method:"POST"})
-      .then(r=>r.json()).then(d=>{ msg(d.message || "Always On gestoppt.", d.status === "ok"); updateAlwaysOnStatus(); });
-    return;
-  }
-  let hours = parseInt(prompt("Wie viele Stunden? (0 = unbegrenzt, Standard: 24)", "24"));
-  if (isNaN(hours) || hours < 0) return;
-  if (hours === 0) hours = 9999;
-  if (!doubleConfirm("Always On für " + (hours===9999 ? "unbegrenzt" : hours+"h") + " starten?")) return;
-  fetch("/alwayson/start", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({hours: hours})
-  }).then(r=>r.json()).then(d=>{
-    msg(d.message || "Always On gestartet.", d.status === "ok");
-    updateAlwaysOnStatus();
-  }).catch(e=>msg("Always-On-Fehler: " + e, false));
-}
-
-// Poll status every 30s + initial load
-setInterval(updateAlwaysOnStatus, 30000);
-updateAlwaysOnStatus();
-
-async function wakePC() {
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = "Sende...";
-  msg("");
-  try {
-    const r = await fetch("/wake", {method:"POST"});
-    const d = await r.json();
-    msg(d.message || "OK", d.status === "ok");
-  } catch(e) {
-    msg("Fehler: " + e, false);
-  }
-  btn.disabled = false;
-  btn.textContent = "PC Aufwecken";
-}
-
-async function sleepPC() {
-  if (!doubleConfirm("PC in Standby versetzen?")) return;
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = "Standby...";
-  msg("");
-  try {
-    const r = await fetch("/sleep", {method:"POST"});
-    const d = await r.json();
-    msg(d.message || "OK", d.status === "ok");
-  } catch(e) {
-    msg("PC schläft jetzt.", true);
-  }
-  btn.disabled = false;
-  btn.textContent = "PC Schlafen";
-}
-
-async function rebootPC() {
-  if (!doubleConfirm("PC wirklich neu starten?")) return;
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = "Starte neu...";
-  msg("");
-  try {
-    const r = await fetch("/reboot", {method:"POST"});
-    const d = await r.json();
-    msg(d.message || "OK", d.status === "ok");
-  } catch(e) {
-    msg("Neustart wurde vermutlich bereits eingeleitet.", true);
-  }
-  btn.disabled = false;
-  btn.textContent = "PC Neustarten";
-}
-
-async function shutdownPC() {
-  if (!doubleConfirm("PC wirklich herunterfahren?")) return;
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = "Fahre herunter...";
-  msg("");
-  try {
-    const r = await fetch("/shutdown", {method:"POST"});
-    const d = await r.json();
-    msg(d.message || "OK", d.status === "ok");
-  } catch(e) {
-    msg("PC vermutlich schon aus.", true);
-  }
-  btn.disabled = false;
-  btn.textContent = "PC Herunterfahren";
-}
-</script>
-</body>
-</html>"""
-
 # ── Server-side Always-On Timer ──────────────────────────────────────
 
 WOL_MAC = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
@@ -398,21 +196,86 @@ def alwayson_status():
 
 # ── Handler ──────────────────────────────────────────────────────────
 
+from pathlib import Path
+from urllib.parse import urlsplit
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from devices import Fleet
+
+FLEET = None
+
+def get_fleet():
+    global FLEET
+    if FLEET is None:
+        config = json.loads(Path(os.environ.get('DEVICE_CONFIG_FILE', str(Path(__file__).with_name('devices.json')))).read_text())
+        FLEET = Fleet(config, {'start': start_alwayson, 'stop': stop_alwayson, 'status': alwayson_status})
+    return FLEET
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == '/api/devices':
+            self._json(get_fleet().status())
+            return
+        if self.path.startswith('/api/'):
+            self._json({'status': 'error', 'message': 'Nicht gefunden'}, code=404)
+            return
+        if self.path == '/':
+            page = Path(__file__).with_name('index.html').read_text()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(page.encode())
+            return
         if self.path == "/health":
             self._json({"status":"ok","host":socket.gethostname()})
             return
         if self.path == "/alwayson":
             self._json(alwayson_status())
             return
-        self.send_response(200)
-        self.send_header("Content-Type","text/html; charset=utf-8")
-        self.end_headers()
-        page = HTML.replace("{host}", socket.gethostname()).replace("{port}", str(self.server.server_address[1]))
-        self.wfile.write(page.encode())
+        self._json({'status': 'error', 'message': 'Nicht gefunden'}, code=404)
 
     def do_POST(self):
+        origin = self.headers.get('Origin')
+        if (origin and urlsplit(origin).netloc != self.headers.get('Host')) or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            self._json({'status': 'error', 'message': 'Fremder Ursprung nicht erlaubt.'}, code=403)
+            return
+        if self.path.startswith('/api/devices/'):
+            parts = self.path.split('/')
+            key = parts[3] if len(parts) > 3 else ''
+            fleet = get_fleet()
+            if key not in fleet.config:
+                self._json({'status': 'error', 'message': 'Unbekanntes Gerät'}, code=404)
+                return
+            action = '/'.join(parts[4:])
+            try:
+                if action == 'alwayson/start':
+                    length = int(self.headers.get('Content-Length', 0))
+                    if not 0 < length <= 1024:
+                        raise ValueError('Ungültige Anfragegröße')
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise ValueError('JSON-Objekt erforderlich')
+                    result = fleet.start(key, data.get('hours', 24))
+                elif action == 'alwayson/stop':
+                    fleet.stop(key)
+                    result = {'status': 'ok', 'message': 'Always On für dieses Gerät beendet.'}
+                elif action in ('wake', 'sleep', 'reboot', 'shutdown'):
+                    if key == 'main':
+                        if action != 'wake' and alwayson_status()['active']:
+                            self._json({'status': 'error', 'message': 'Bitte zuerst Always On beenden.'}, code=409)
+                            return
+                        {'wake': self._run_wol, 'sleep': self._run_ssh_sleep,
+                         'reboot': self._run_ssh_reboot, 'shutdown': self._run_ssh_shutdown}[action]()
+                        return
+                    result = fleet.action(key, action)
+                else:
+                    self._json({'status': 'error', 'message': 'Unbekannte Aktion'}, code=404)
+                    return
+                self._json(result, code=200 if result['status'] == 'ok' else 502)
+            except (ValueError, TypeError) as exc:
+                self._json({'status': 'error', 'message': str(exc)}, code=400)
+            return
         if self.path == "/shutdown":
             self._run_ssh_shutdown()
         elif self.path == "/reboot":
@@ -460,7 +323,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 err = r.stderr.strip() or f"Exit-Code {r.returncode}"
                 self._json({"status":"error","message":err}, code=500)
         except subprocess.TimeoutExpired:
-            self._json({"status":"ok","message":"PC antwortet nicht mehr — vermutlich im Standby."})
+            self._json({"status":"unknown","message":"Keine sichere Rückmeldung. Gerätestatus prüfen, nicht blind wiederholen."}, code=504)
         except Exception as e:
             self._json({"status":"error","message":str(e)}, code=500)
 
@@ -476,7 +339,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self._json({"status":"error","message":r.stderr.strip() or "Fehler"}, code=500)
         except subprocess.TimeoutExpired:
-            self._json({"status":"ok","message":"PC antwortet nicht mehr — vermutlich aus."})
+            self._json({"status":"unknown","message":"Keine sichere Rückmeldung. Gerätestatus prüfen, nicht blind wiederholen."}, code=504)
         except Exception as e:
             self._json({"status":"error","message":str(e)}, code=500)
 
@@ -492,7 +355,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self._json({"status":"error","message":r.stderr.strip() or "Fehler"}, code=500)
         except subprocess.TimeoutExpired:
-            self._json({"status":"ok","message":"PC antwortet nicht mehr — Neustart vermutlich eingeleitet."})
+            self._json({"status":"unknown","message":"Keine sichere Rückmeldung. Gerätestatus prüfen, nicht blind wiederholen."}, code=504)
         except Exception as e:
             self._json({"status":"error","message":str(e)}, code=500)
 
@@ -519,6 +382,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _json(self, data, code=200):
         self.send_response(code)
         self.send_header("Content-Type","application/json")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -531,5 +395,5 @@ if __name__ == "__main__":
     class RS(http.server.HTTPServer):
         allow_reuse_address = True
     server = RS(("127.0.0.1", PORT), Handler)
-    print(f"Radxa server on 0.0.0.0:{PORT}")
+    print(f"Radxa server on 127.0.0.1:{PORT}")
     server.serve_forever()
