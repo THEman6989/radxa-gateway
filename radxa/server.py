@@ -12,7 +12,7 @@ import time
 # ── Server-side Always-On Timer ──────────────────────────────────────
 
 WOL_MAC = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
-WOL_BROADCAST = os.environ.get("WOL_BROADCAST", "192.168.178.255")
+WOL_BROADCAST = os.environ.get("WOL_BROADCAST", "192.168.2.255")
 WOL_PORT = os.environ.get("WOL_PORT", "9")
 PC_SSH_USER = os.environ.get("PC_SSH_USER", "amin")
 PC_SSH_PORT = os.environ.get("PC_SSH_PORT", "2222")
@@ -269,8 +269,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 elif action == 'alwayson/stop':
                     fleet.stop(key)
                     result = {'status': 'ok', 'message': 'Always On für dieses Gerät beendet.'}
-                elif action in ('wake', 'sleep', 'reboot', 'shutdown'):
+                elif action in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown'):
                     if key == 'main':
+                        if action == 'wakewin':
+                            self._json({'status': 'error', 'message': 'Unbekannte Aktion'}, code=404)
+                            return
                         if action != 'wake' and alwayson_status()['active']:
                             self._json({'status': 'error', 'message': 'Bitte zuerst Always On beenden.'}, code=409)
                             return
@@ -370,7 +373,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _run_wol(self):
         mac = os.environ.get("WOL_MAC", "10:7c:61:47:07:d9")
-        broadcast = os.environ.get("WOL_BROADCAST", "192.168.178.255")
+        broadcast = os.environ.get("WOL_BROADCAST", "192.168.2.255")
         port = os.environ.get("WOL_PORT", "9")
         try:
             r = subprocess.run(

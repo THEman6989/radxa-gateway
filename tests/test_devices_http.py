@@ -88,6 +88,20 @@ class HTTPTests(unittest.TestCase):
             code, body = self.request('POST', '/api/devices/main/reboot')
         self.assertEqual(json.loads(body)['status'], 'unknown')
 
+    def test_unraid_wakewin_sends_magic_packet_not_ssh(self):
+        with mock.patch.object(server.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
+            code, body = self.request('POST', '/api/devices/unraid/wakewin')
+        self.assertEqual(code, 200)
+        self.assertEqual(run.call_args.args[0][:4], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p'])
+        self.assertEqual(run.call_args.args[0][-1], '00:e0:4c:3b:00:32')
+        self.assertIn('Windows', json.loads(body)['message'])
+
+    def test_main_wakewin_rejected_without_subprocess(self):
+        with mock.patch.object(server.subprocess, 'run') as run:
+            code, _ = self.request('POST', '/api/devices/main/wakewin')
+        self.assertEqual(code, 404)
+        run.assert_not_called()
+
     def test_no_legacy_page_on_unknown_routes(self):
         code, _ = self.request('GET', '/typo')
         self.assertEqual(code, 404)
@@ -98,7 +112,7 @@ class HTTPTests(unittest.TestCase):
 
     def test_page_has_named_tabs(self):
         _, body = self.request('GET', '/')
-        for label in ('Haupt-PC', 'MI50-PC', 'Unraid-PC', 'role="tab"'):
+        for label in ('Haupt-PC', 'MI50-PC', 'Unraid-PC', 'role="tab"', 'Windows wecken'):
             self.assertIn(label.encode(), body)
 
 if __name__ == '__main__':

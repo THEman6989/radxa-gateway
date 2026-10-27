@@ -35,9 +35,11 @@ class Fleet:
                 raise RuntimeError('MI50-Watchdog konnte nicht pausiert werden')
 
     def action(self, key, action):
-        if key not in self.config or action not in ('wake', 'sleep', 'reboot', 'shutdown'):
+        if key not in self.config or action not in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown'):
             raise ValueError('Unbekanntes Gerät oder Aktion')
         d = self.config[key]
+        if action == 'wakewin' and not d.get('wake_windows'):
+            raise ValueError('Dieses Gerät hat kein separates Windows-Wecken.')
         if not self.locks[key].acquire(blocking=False):
             return {'status': 'error', 'message': 'Für dieses Gerät läuft bereits eine Aktion.'}
         try:
@@ -49,15 +51,17 @@ class Fleet:
                 self.pause_watchdog(d)
                 if key == 'mi50' and self.safety:
                     self.safety.intent(action)
-            if action == 'wake':
-                cmd = ['/usr/bin/wakeonlan', '-i', d.get('broadcast', '192.168.178.255'),
+            if action in ('wake', 'wakewin'):
+                cmd = ['/usr/bin/wakeonlan', '-i', d.get('broadcast', '192.168.2.255'),
                        '-p', '9', d['mac']]
             else:
                 cmd = self.ssh(d, d.get('prefix', 'sudo -n ') + shlex.quote(d['helper']) + ' ' + action)
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if r.returncode:
                 return {'status': 'error', 'message': r.stderr.strip() or 'Steuerbefehl fehlgeschlagen.'}
-            message = 'Magic Packet gesendet; Start noch nicht bestätigt.' if action == 'wake' else 'Befehl angenommen; Status wird aktualisiert.'
+            message = 'Magic Packet gesendet; Start noch nicht bestätigt.' if action == 'wake' else (
+                'Magic Packet für die Windows-Installation gesendet; Start noch nicht bestätigt.'
+                if action == 'wakewin' else 'Befehl angenommen; Status wird aktualisiert.')
             if d.get('pause_file') and action != 'wake':
                 message += ' MI50-Watchdog pausiert, damit kein automatisches Wiedereinschalten erfolgt.'
             return {'status': 'ok', 'message': message}

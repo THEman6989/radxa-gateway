@@ -59,7 +59,25 @@ class DevicesTests(unittest.TestCase):
         fleet = self.fleet()
         with mock.patch('devices.subprocess.run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
             fleet.action('mi50', 'wake')
-        self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.178.255', '-p', '9', 'b4:2e:99:89:35:14'])
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p', '9', 'b4:2e:99:89:35:14'])
+
+    def test_wakewin_only_for_flagged_devices_and_sends_same_packet(self):
+        import devices
+        fleet = self.fleet()
+        with self.assertRaises(ValueError):
+            fleet.action('mi50', 'wakewin')
+        fleet.config['unraid'] = dict(fleet.config['mi50'], name='Unraid-PC', wake_windows=True)
+        import threading
+        fleet.locks['unraid'] = threading.Lock()
+        with mock.patch('devices.subprocess.run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
+            result = fleet.action('unraid', 'wakewin')
+        self.assertEqual(result['status'], 'ok')
+        self.assertIn('Windows', result['message'])
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p', '9', 'b4:2e:99:89:35:14'])
+        with mock.patch('devices.subprocess.run') as run:
+            with self.assertRaises(ValueError):
+                fleet.action('main', 'wakewin')
+            run.assert_not_called()
 
     def test_alwayson_has_independent_holders(self):
         fleet = self.fleet()
