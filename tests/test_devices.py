@@ -61,23 +61,44 @@ class DevicesTests(unittest.TestCase):
             fleet.action('mi50', 'wake')
         self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p', '9', 'b4:2e:99:89:35:14'])
 
-    def test_wakewin_only_for_flagged_devices_and_sends_same_packet(self):
+    def test_wakewin_only_for_flagged_devices_and_uses_windows_mac(self):
         import devices
         fleet = self.fleet()
         with self.assertRaises(ValueError):
             fleet.action('mi50', 'wakewin')
-        fleet.config['unraid'] = dict(fleet.config['mi50'], name='Unraid-PC', wake_windows=True)
+        fleet.config['unraid'] = dict(fleet.config['mi50'], name='Unraid-PC',
+                                      windows={'mac': 'e4:54:e8:b7:2d:f4', 'host': '192.0.2.9', 'port': 22, 'user': 'amine'})
         import threading
         fleet.locks['unraid'] = threading.Lock()
         with mock.patch('devices.subprocess.run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
             result = fleet.action('unraid', 'wakewin')
         self.assertEqual(result['status'], 'ok')
         self.assertIn('Windows', result['message'])
-        self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p', '9', 'b4:2e:99:89:35:14'])
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p', '9', 'e4:54:e8:b7:2d:f4'])
         with mock.patch('devices.subprocess.run') as run:
             with self.assertRaises(ValueError):
                 fleet.action('main', 'wakewin')
             run.assert_not_called()
+
+    def test_win_power_actions_use_windows_ssh_transport(self):
+        import devices
+        fleet = self.fleet()
+        with self.assertRaises(ValueError):
+            fleet.action('mi50', 'winshutdown')
+        fleet.config['unraid'] = dict(fleet.config['mi50'], name='Unraid-PC',
+                                      windows={'mac': 'e4:54:e8:b7:2d:f4', 'host': '192.0.2.9', 'port': 22, 'user': 'amine'})
+        import threading
+        fleet.locks['unraid'] = threading.Lock()
+        expected = {'winsleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                    'winreboot': 'shutdown /r /t 0',
+                    'winshutdown': 'shutdown /s /t 0'}
+        for action, cmd in expected.items():
+            with mock.patch('devices.subprocess.run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
+                result = fleet.action('unraid', action)
+            self.assertEqual(result['status'], 'ok')
+            args = run.call_args.args[0]
+            self.assertEqual(args[-1], cmd)
+            self.assertIn('amine@192.0.2.9', args)
 
     def test_alwayson_has_independent_holders(self):
         fleet = self.fleet()

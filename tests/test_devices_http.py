@@ -88,13 +88,28 @@ class HTTPTests(unittest.TestCase):
             code, body = self.request('POST', '/api/devices/main/reboot')
         self.assertEqual(json.loads(body)['status'], 'unknown')
 
-    def test_unraid_wakewin_sends_magic_packet_not_ssh(self):
+    def test_unraid_wakewin_sends_windows_mac_packet_not_ssh(self):
         with mock.patch.object(server.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
             code, body = self.request('POST', '/api/devices/unraid/wakewin')
         self.assertEqual(code, 200)
         self.assertEqual(run.call_args.args[0][:4], ['/usr/bin/wakeonlan', '-i', '192.168.2.255', '-p'])
-        self.assertEqual(run.call_args.args[0][-1], '00:e0:4c:3b:00:32')
+        self.assertEqual(run.call_args.args[0][-1], 'e4:54:e8:b7:2d:f4')
         self.assertIn('Windows', json.loads(body)['message'])
+
+    def test_unraid_winshutdown_uses_windows_ssh_not_helper(self):
+        with mock.patch.object(server.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='', stderr='')) as run:
+            code, _ = self.request('POST', '/api/devices/unraid/winshutdown')
+        self.assertEqual(code, 200)
+        args = run.call_args.args[0]
+        self.assertEqual(args[-1], 'shutdown /s /t 0')
+        self.assertIn('amine@192.168.2.199', args)
+
+    def test_main_rejects_all_windows_actions(self):
+        with mock.patch.object(server.subprocess, 'run') as run:
+            for action in ('wakewin', 'winsleep', 'winreboot', 'winshutdown'):
+                code, _ = self.request('POST', '/api/devices/main/' + action)
+                self.assertEqual(code, 404)
+        run.assert_not_called()
 
     def test_main_wakewin_rejected_without_subprocess(self):
         with mock.patch.object(server.subprocess, 'run') as run:

@@ -35,11 +35,12 @@ class Fleet:
                 raise RuntimeError('MI50-Watchdog konnte nicht pausiert werden')
 
     def action(self, key, action):
-        if key not in self.config or action not in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown'):
+        if key not in self.config or action not in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown',
+                                                    'winsleep', 'winreboot', 'winshutdown'):
             raise ValueError('Unbekanntes Gerät oder Aktion')
         d = self.config[key]
-        if action == 'wakewin' and not d.get('wake_windows'):
-            raise ValueError('Dieses Gerät hat kein separates Windows-Wecken.')
+        if action in ('wakewin', 'winsleep', 'winreboot', 'winshutdown') and not d.get('windows'):
+            raise ValueError('Dieses Gerät hat keine Windows-Steuerung.')
         if not self.locks[key].acquire(blocking=False):
             return {'status': 'error', 'message': 'Für dieses Gerät läuft bereits eine Aktion.'}
         try:
@@ -52,8 +53,14 @@ class Fleet:
                 if key == 'mi50' and self.safety:
                     self.safety.intent(action)
             if action in ('wake', 'wakewin'):
+                mac = d['mac'] if action == 'wake' else d['windows']['mac']
                 cmd = ['/usr/bin/wakeonlan', '-i', d.get('broadcast', '192.168.2.255'),
-                       '-p', '9', d['mac']]
+                       '-p', '9', mac]
+            elif action in ('winsleep', 'winreboot', 'winshutdown'):
+                win_cmd = {'winsleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                           'winreboot': 'shutdown /r /t 0',
+                           'winshutdown': 'shutdown /s /t 0'}[action]
+                cmd = self.ssh(d['windows'], win_cmd)
             else:
                 cmd = self.ssh(d, d.get('prefix', 'sudo -n ') + shlex.quote(d['helper']) + ' ' + action)
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -62,7 +69,7 @@ class Fleet:
             message = 'Magic Packet gesendet; Start noch nicht bestätigt.' if action == 'wake' else (
                 'Magic Packet für die Windows-Installation gesendet; Start noch nicht bestätigt.'
                 if action == 'wakewin' else 'Befehl angenommen; Status wird aktualisiert.')
-            if d.get('pause_file') and action != 'wake':
+            if d.get('pause_file') and action not in ('wake', 'wakewin', 'winsleep', 'winreboot', 'winshutdown'):
                 message += ' MI50-Watchdog pausiert, damit kein automatisches Wiedereinschalten erfolgt.'
             return {'status': 'ok', 'message': message}
         except subprocess.TimeoutExpired:
@@ -164,13 +171,16 @@ class Fleet:
 
     @staticmethod
     def probe(device):
-        try:
-            result = subprocess.run(['ping', '-n', '-c', '1', '-W', '1',
-                                     device.get('status_host', device['host'])],
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-            return result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+        hosts = device.get('status_hosts') or [device.get('status_host') or device['host']]
+        for target in hosts:
+            try:
+                result = subprocess.run(['ping', '-n', '-c', '1', '-W', '1', target],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                if result.returncode == 0:
+                    return True
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        return False
 
     def status(self):
         entries = list(self.config.items())

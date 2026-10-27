@@ -10,7 +10,7 @@
 </nav><section id="panel" role="tabpanel" aria-labelledby="tab-main"><div class="detail"><h2 id="name">Haupt-PC</h2><span id="status" class="badge">Prüfe …</span></div><p id="note" class="muted note">Status wird geladen.</p>
 <div class="actions"><button class="btn wake" data-action="wake">Aufwecken</button><button class="btn sleep" data-action="sleep">Schlafen</button><button class="btn reboot" data-action="reboot">Neustarten</button><button class="btn shutdown" data-action="shutdown">Herunterfahren</button></div>
 <button class="btn always" id="alwaysonBtn">↻ Always On</button><div class="always-status" id="alwaysStatus"></div>
-<button class="btn wake" id="wakewinBtn" data-action="wakewin" hidden style="width:100%;margin-top:12px">🖥️ Windows wecken</button>
+<div class="actions" id="winActions" hidden style="margin-top:12px"><button class="btn wake" data-action="wakewin">🖥️ Windows wecken</button><button class="btn sleep" data-action="winsleep">Windows schlafen</button><button class="btn reboot" data-action="winreboot">Windows neustarten</button><button class="btn shutdown" data-action="winshutdown">Windows herunterfahren</button></div>
 <aside id="mi50Health" hidden aria-live="polite" style="margin-top:16px;padding:14px;border:1px solid #525252;border-radius:10px;line-height:1.6;font-size:13px"><strong id="healthText"></strong><pre id="healthEvidence" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px"></pre><p id="hardoffStatus"></p><a href="https://rock-2a.tail852b38.ts.net:4444/" target="_blank" rel="noopener" style="color:#5eead4">KVM öffnen ↗</a></aside>
 <button class="btn shutdown" id="hardoffBtn" hidden style="width:100%;margin-top:14px;border:1px solid #f87171">⚠ Hard Off · 8 Sekunden Power-Taste</button>
 <div class="msg" id="msg" role="status" aria-live="polite"></div></section>
@@ -30,7 +30,7 @@ function render(){
  $('alwaysStatus').textContent=a?.active?((a.inhibitor_active?'Schlafschutz aktiv':'Schlafschutz verbindet …')+' · noch '+Math.ceil(a.remaining_min/60)+' h'):'Schlafschutz und regelmäßiges Wake-on-LAN für dieses Gerät.';
  document.querySelectorAll('.btn').forEach(b=>{b.disabled=busy||!fresh||!d||(Boolean(a?.active)&&['sleep','shutdown','reboot'].includes(b.dataset.action));});
  const health=d?.health, hard=health?.hardoff;
- $('wakewinBtn').hidden=selected!=='unraid';
+ $('winActions').hidden=selected!=='unraid';
  $('mi50Health').hidden=selected!=='mi50';$('hardoffBtn').hidden=selected!=='mi50';
  $('healthText').textContent=fresh?(health?.message||'Wächterstatus unbekannt.'):'Wächterstatus unbekannt — Gateway-Abfrage fehlgeschlagen.';
  $('healthEvidence').textContent=fresh?(health?.evidence||''):'';
@@ -44,7 +44,7 @@ async function refresh(){try{const r=await fetch('/api/devices',{cache:'no-store
 function doubleConfirm(q){return confirm(q)&&confirm('WIRKLICH? '+q);}
 async function action(action,body){
  const target=selected,name=names[target];
- if(action!=='wake'&&!['wake','wakewin'].includes(action)&&!doubleConfirm(name+': '+({'hardoff':'HART AUSSCHALTEN (Power-Taste 8 Sekunden halten, Datenverlust möglich; Always On wird beendet)', 'sleep':'in Standby versetzen','reboot':'neu starten','shutdown':'herunterfahren','alwayson/start':'Always On starten','alwayson/stop':'Always On beenden'}[action])+'?'+(target==='mi50'&&['sleep','shutdown','reboot'].includes(action)?' Der Recovery-Watchdog wird pausiert.':'')))return;
+ if(action!=='wake'&&!['wake','wakewin'].includes(action)&&!doubleConfirm(name+': '+({'hardoff':'HART AUSSCHALTEN (Power-Taste 8 Sekunden halten, Datenverlust möglich; Always On wird beendet)', 'sleep':'in Standby versetzen','reboot':'neu starten','shutdown':'herunterfahren','winsleep':'Windows in Schlaf versetzen','winreboot':'Windows neu starten','winshutdown':'Windows herunterfahren','alwayson/start':'Always On starten','alwayson/stop':'Always On beenden'}[action])+'?'+(target==='mi50'&&['sleep','shutdown','reboot'].includes(action)?' Der Recovery-Watchdog wird pausiert.':'')))return;
  busy=true;messages[target]={text:'Befehl an '+name+' wird gesendet …',ok:true};render();
  try{const r=await fetch('/api/devices/'+target+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{}),signal:AbortSignal.timeout(30000)});const data=await r.json();messages[target]={text:data.message||'Keine Rückmeldung.',ok:data.status==='ok'};}catch(e){messages[target]={text:'Keine sichere Rückmeldung. Status prüfen; Aktion nicht blind wiederholen.',ok:false};}
  await refresh();busy=false;render();

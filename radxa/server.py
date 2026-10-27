@@ -269,9 +269,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 elif action == 'alwayson/stop':
                     fleet.stop(key)
                     result = {'status': 'ok', 'message': 'Always On für dieses Gerät beendet.'}
-                elif action in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown'):
+                elif action in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown',
+                                'winsleep', 'winreboot', 'winshutdown'):
                     if key == 'main':
-                        if action == 'wakewin':
+                        if action not in ('wake', 'sleep', 'reboot', 'shutdown'):
                             self._json({'status': 'error', 'message': 'Unbekannte Aktion'}, code=404)
                             return
                         if action != 'wake' and alwayson_status()['active']:
