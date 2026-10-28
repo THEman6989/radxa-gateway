@@ -9,6 +9,10 @@ import time
 from mi50_safety import Safety
 
 
+# Add-Type System.Windows.Forms; Application::SetSuspendState('Suspend', $false, $false) (UTF-16LE base64)
+WIN_SUSPEND_B64 = ('QQBkAGQALQBUAHkAcABlACAALQBBAHMAcwBlAG0AYgBsAHkATgBhAG0AZQAgAFMAeQBzAHQAZQBtAC4AVwBpAG4AZABvAHcAcwAuAEYAbwByAG0AcwA7ACAAWwB2AG8AaQBkAF0AWwBTAHkAcwB0AGUAbQAuAFcAaQBuAGQAbwB3AHMALgBGAG8AcgBtAHMALgBBAHAAcABsAGkAYwBhAHQAaQBvAG4AXQA6ADoAUwBlAHQAUwB1AHMAcABlAG4AZABTAHQAYQB0AGUAKAAnAFMAdQBzAHAAZQBuAGQAJwAsACAAJABmAGEAbABzAGUALAAgACQAZgBhAGwAcwBlACkA')
+
+
 class Fleet:
     def __init__(self, config, main):
         self.config = config
@@ -41,6 +45,10 @@ class Fleet:
         d = self.config[key]
         if action in ('wakewin', 'winsleep', 'winreboot', 'winshutdown') and not d.get('windows'):
             raise ValueError('Dieses Gerät hat keine Windows-Steuerung.')
+        if action == 'wakewin' and not d['windows'].get('wake', True):
+            raise ValueError('Windows-Wecken ist für dieses Gerät nicht verfügbar (Boot-Reihenfolge).')
+        if action in ('winsleep', 'winreboot', 'winshutdown') and not d['windows'].get('control_ready', True):
+            return {'status': 'error', 'message': 'Windows-SSH ist für diesen PC noch nicht eingerichtet und verifiziert. Keine Aktion gesendet.'}
         if not self.locks[key].acquire(blocking=False):
             return {'status': 'error', 'message': 'Für dieses Gerät läuft bereits eine Aktion.'}
         try:
@@ -57,7 +65,8 @@ class Fleet:
                 cmd = ['/usr/bin/wakeonlan', '-i', d.get('broadcast', '192.168.2.255'),
                        '-p', '9', mac]
             elif action in ('winsleep', 'winreboot', 'winshutdown'):
-                win_cmd = {'winsleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+                # Echter Standby (S3) statt rundll32, das bei aktivem Ruhezustand hibernieren kann.
+                win_cmd = {'winsleep': 'powershell -NoProfile -NonInteractive -EncodedCommand ' + WIN_SUSPEND_B64,
                            'winreboot': 'shutdown /r /t 0',
                            'winshutdown': 'shutdown /s /t 0'}[action]
                 cmd = self.ssh(d['windows'], win_cmd)
@@ -67,7 +76,7 @@ class Fleet:
             if r.returncode:
                 return {'status': 'error', 'message': r.stderr.strip() or 'Steuerbefehl fehlgeschlagen.'}
             message = 'Magic Packet gesendet; Start noch nicht bestätigt.' if action == 'wake' else (
-                'Magic Packet für die Windows-Installation gesendet; Start noch nicht bestätigt.'
+                'Magic Packet gesendet; Windows ist nicht garantiert: Die Firmware startet das Standard-Betriebssystem. Start noch nicht bestätigt.'
                 if action == 'wakewin' else 'Befehl angenommen; Status wird aktualisiert.')
             if d.get('pause_file') and action not in ('wake', 'wakewin', 'winsleep', 'winreboot', 'winshutdown'):
                 message += ' MI50-Watchdog pausiert, damit kein automatisches Wiedereinschalten erfolgt.'
@@ -186,10 +195,15 @@ class Fleet:
         entries = list(self.config.items())
         with ThreadPoolExecutor(max_workers=3) as pool:
             online = list(pool.map(self.probe, [d for _, d in entries]))
+            windows_online = list(pool.map(lambda d: self.probe(d['windows']) if d.get('windows') else None,
+                                           [d for _, d in entries]))
         return {'checked_at': time.time(), 'devices': [
             {'id': key, 'name': device['name'], 'online': up,
+             'windows': {'online': win_up, 'control_ready': device['windows'].get('control_ready', True),
+                         'wake': device['windows'].get('wake', True),
+                         'note': device['windows'].get('note', '')} if device.get('windows') else None,
              'alwayson': self.alwayson(key), 'note': device.get('note', ''),
              'health': self.safety.status(up) if key == 'mi50' and self.safety else None,
              'watchdog_paused': Path(device['pause_file']).exists() if device.get('pause_file') else None}
-            for (key, device), up in zip(entries, online)
+            for (key, device), up, win_up in zip(entries, online, windows_online)
         ]}

@@ -104,12 +104,20 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(args[-1], 'shutdown /s /t 0')
         self.assertIn('amine@192.168.2.199', args)
 
-    def test_main_rejects_all_windows_actions(self):
+    def test_main_windows_controls_send_nothing_until_verified(self):
         with mock.patch.object(server.subprocess, 'run') as run:
-            for action in ('wakewin', 'winsleep', 'winreboot', 'winshutdown'):
-                code, _ = self.request('POST', '/api/devices/main/' + action)
-                self.assertEqual(code, 404)
+            for action in ('winsleep', 'winreboot', 'winshutdown'):
+                code, body = self.request('POST', '/api/devices/main/' + action)
+                self.assertEqual(code, 502)
+                self.assertIn('nicht eingerichtet', json.loads(body)['message'])
         run.assert_not_called()
+
+    def test_status_exposes_windows_only_for_dual_boot_pcs(self):
+        _, body = self.request('GET', '/api/devices')
+        devices = {d['id']: d for d in json.loads(body)['devices']}
+        self.assertIsNone(devices['mi50']['windows'])
+        self.assertFalse(devices['main']['windows']['wake'])
+        self.assertTrue(devices['unraid']['windows']['wake'])
 
     def test_main_wakewin_rejected_without_subprocess(self):
         with mock.patch.object(server.subprocess, 'run') as run:

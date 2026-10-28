@@ -89,7 +89,11 @@ class DevicesTests(unittest.TestCase):
                                       windows={'mac': 'e4:54:e8:b7:2d:f4', 'host': '192.0.2.9', 'port': 22, 'user': 'amine'})
         import threading
         fleet.locks['unraid'] = threading.Lock()
-        expected = {'winsleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0',
+        import base64, devices as devmod
+        self.assertEqual(base64.b64decode(devmod.WIN_SUSPEND_B64).decode('utf-16le'),
+                         "Add-Type -AssemblyName System.Windows.Forms; "
+                         "[void][System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)")
+        expected = {'winsleep': 'powershell -NoProfile -NonInteractive -EncodedCommand ' + devmod.WIN_SUSPEND_B64,
                     'winreboot': 'shutdown /r /t 0',
                     'winshutdown': 'shutdown /s /t 0'}
         for action, cmd in expected.items():

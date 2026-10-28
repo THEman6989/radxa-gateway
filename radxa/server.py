@@ -272,6 +272,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 elif action in ('wake', 'wakewin', 'sleep', 'reboot', 'shutdown',
                                 'winsleep', 'winreboot', 'winshutdown'):
                     if key == 'main':
+                        if action in ('winsleep', 'winreboot', 'winshutdown'):
+                            result = fleet.action(key, action)
+                            self._json(result, code=200 if result['status'] == 'ok' else 502)
+                            return
                         if action not in ('wake', 'sleep', 'reboot', 'shutdown'):
                             self._json({'status': 'error', 'message': 'Unbekannte Aktion'}, code=404)
                             return
